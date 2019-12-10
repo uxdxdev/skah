@@ -1,0 +1,20 @@
+{
+  "name": "skah",
+  "version": "1.0.0",
+  "description": "",
+  "main": "robot.js",
+  "scripts": {
+    "test": "node test.js",
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^3.0.0",
+    "img-diff-js": "^0.4.1",
+    "robotjs": "^0.5.1",
+    "screenshot-desktop": "^1.10.0",
+    "sharp": "^0.23.4",
+    "tesseract.js": "2.0.0-beta.2"
+  }
+}
