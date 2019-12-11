@@ -18,7 +18,7 @@ const input = `shot.jpg`
 const outputPrev = `shot_output_prev.jpg`
 const output = `shot_output.jpg`
 const buyPriceIncrement = 0.0005;
-const sellPriceIncrement = 0.005;
+const sellPriceIncrement = 0.0005;
 
 let isBuying = false;
 let buyOrderConfirmed = false;
@@ -27,12 +27,13 @@ let isSelling = false;
 let sellOrderConfirmed = false;
 let sellOrderExists = false;
 let buyPrice = 0;
-let maxSellPrice = 0;
+let sellPrice = 0;
 let minSellPrice = 0;
 let profit = 0
 let totalProfit = 0;
 let invalidScrape = 0;
 let noChange = 0;
+let transactionInProgress = true;
 
 const isOffersValid = offers => offers.length == 5 && offers.every((v, i, a) => !i || a[i - 1] >= v);
 
@@ -50,7 +51,7 @@ const start = async () => {
             .toColorspace('b-w')
             .negate()
             .threshold(110)
-            .resize(1500, null)
+            .resize(1600, null)
             .toFile(output);
 
         // check if file exists
@@ -71,18 +72,17 @@ const start = async () => {
             }
         });
 
-        // copy to prev image
         fs.copyFileSync(output, outputPrev);
 
-        if (imagesAreSame) {
+        if (imagesAreSame && transactionInProgress && noChange < 60) {
             noChange += 1;
-            if (noChange > 50) {
-                idle();
-                noChange = 0;
-            }
-            await sleep(1000);
+            transactionInProgress = true;
+            await sleep(500);
             continue;
         }
+
+        noChange = 0;
+        idle();
 
         const { valid, buyOffers, buyOfferQuantity, sellOffers, sellOfferQuantity } = await tesseract.recognize(output).then(({ data }) => {
             const { lines } = data;
@@ -140,16 +140,40 @@ const start = async () => {
         if (valid && buyOrderConfirmed) {
             buyOrderExists = buyOffers.includes(buyPrice)
 
+            if (!buyOrderExists) {
+                console.log(chalk.green('BUY ORDER COMPLETE'))
+                console.log(chalk.red(`SELL ORDER SUBMITTED ${sellPrice}`))
+                isBuying = false;
+                buyOrderConfirmed = false;
+                isSelling = true;
+                sellOrderConfirmed = true;
+                sellInput(sellPrice.toString());
+                // sellIncrement();
+                sellPost();
+                idle();
+                await sleep(2000);
+                continue;
+            }
+
             // if the buy order has been pushed down the queue cancel and start again.
             // or if the max sell price is now below the min sell price for the buy order, start again.
             buyOrderPosition = buyOffers.indexOf(buyPrice);
-            const quantity = buyOfferQuantity[buyOrderPosition]
-            if (buyOrderExists && (buyOrderPosition != 0 || maxSellPrice < minSellPrice || (quantity && quantity != 1))) {
-                console.log(chalk.magenta(`BUY ORDER CANCELLED.`))
+            const quantity = buyOfferQuantity[buyOrderPosition];
+
+            if (buyOrderExists) {
+                const currentSellPrice = Math.round(sellOffers[0] * (1.0 - sellPriceIncrement));
+                if (sellPrice != currentSellPrice) {
+                    sellPrice = currentSellPrice;
+                    profit = Math.round(sellPrice - buyPrice);
+                    console.log(chalk.green(`Profit is now ${profit}`))
+                }
+            }
+
+            if (buyOrderExists && (buyOrderPosition != 0 || sellPrice <= minSellPrice || (quantity && quantity != 1))) {
+                console.log(chalk.magenta(`BUY ORDER CANCELLED.`));
                 cancelBuyOrder();
                 isBuying = false;
                 buyOrderConfirmed = false;
-                continue;
             }
 
             if (buyOrderExists && buyOrderPosition == 0) {
@@ -160,26 +184,7 @@ const start = async () => {
                     cancelBuyOrder();
                     isBuying = false;
                     buyOrderConfirmed = false;
-                    // continue;
                 }
-            }
-
-
-            if (!buyOrderExists) {
-                console.log(chalk.green('BUY ORDER COMPLETE'))
-
-                // sell CE for sell price
-                console.log(chalk.red(`SELL ORDER SUBMITTED ${maxSellPrice}`))
-                isBuying = false;
-                buyOrderConfirmed = false;
-                isSelling = true;
-                sellOrderConfirmed = true;
-                sellInput(maxSellPrice.toString());
-                // sellIncrement();
-                sellPost();
-                idle();
-                await sleep(2000);
-                continue;
             }
         }
 
@@ -188,15 +193,12 @@ const start = async () => {
             const fees = 0.02;
             buyPrice = Math.round(buyOffers[0] * (1.0 + buyPriceIncrement));
             minSellPrice = Math.round(buyPrice * (1.0 + fees));
-            maxSellPrice = Math.round(sellOffers[0] * (1.0 - sellPriceIncrement));
-            const profitMargin = (maxSellPrice / buyPrice) - 1.0;
-
-            profit = Math.round(maxSellPrice - buyPrice);
+            sellPrice = Math.round(sellOffers[0] * (1.0 - sellPriceIncrement));
+            profit = Math.round(sellPrice - buyPrice);
             console.log(chalk.grey(`Buy Offer ${buyOffers[0]} Sell offer ${sellOffers[0]}`))
-            console.log(chalk.yellow(`Buy Price ${buyPrice} @ ${profitMargin.toFixed(2)} Sell Price ${maxSellPrice} : Profit ${profit}`))
+            console.log(chalk.yellow(`Buy Price ${buyPrice} Sell Price ${sellPrice} Profit ${profit}`))
 
-
-            if (profit > 0 && minSellPrice < maxSellPrice) {
+            if (profit > 0 && minSellPrice < sellPrice) {
                 // buy CE
                 console.log(chalk.green(`BUY ORDER SUBMITTED ${buyPrice}`))
                 isBuying = true;
@@ -214,15 +216,7 @@ const start = async () => {
 
 
         if (valid && sellOrderConfirmed) {
-            sellOrderExists = sellOffers.includes(maxSellPrice)
-            sellOrderPosition = sellOffers.indexOf(maxSellPrice);
-            const quantity = sellOfferQuantity[sellOrderPosition]
-            if (sellOrderExists && (sellOrderPosition != 0 || (quantity && quantity != 1))) {
-                cancelSellOrder();
-                isSelling = false;
-                sellOrderConfirmed = false;
-                continue;
-            }
+            sellOrderExists = sellOffers.includes(sellPrice);
 
             if (!sellOrderExists) {
                 console.log(chalk.red('SELL ORDER COMPLETE'))
@@ -233,11 +227,18 @@ const start = async () => {
                 sellOrderConfirmed = false;
                 sellOrderExists = false;
                 totalProfit += profit;
+                transactionInProgress = false;
                 console.log(chalk.magenta(`TOTAL PROFIT ${totalProfit}`))
                 refreshPage();
-                console.log('Refreshing page...')
-                await sleep(2000);
-                console.log('Page refreshed.')
+                continue;
+            }
+
+            sellOrderPosition = sellOffers.indexOf(sellPrice);
+            const quantity = sellOfferQuantity[sellOrderPosition]
+            if (sellOrderExists && (sellOrderPosition != 0 || (quantity && quantity != 1))) {
+                cancelSellOrder();
+                isSelling = false;
+                sellOrderConfirmed = false;
             }
         }
 
