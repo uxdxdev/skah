@@ -5,3 +5,5 @@ eng.*
 osd.*
 shot.*
 shot_*
+*.jpg
+*.log
